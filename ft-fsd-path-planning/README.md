@@ -1,66 +1,6 @@
 # ft-fsd-path-planning
 
-FaSTTUBe Formula Student Driverless Path Planning Algorithm
-
-<!-- ![An animation demoing the path planning algorithm](animation.gif) -->
-
-| With color information | Without color information |
-| ---------------------- | ------------------------- |
-| Autocross FSG 2019
-|  ![An animation demoing the path planning algorithm](media/fsg_color.gif#gh-light-mode-only)   ![An animation demoing the path planning algorithm](media/fsg_color_dark_mode.gif#gh-dark-mode-only) | ![An animation demoing the path planning algorithm without color](media/fsg_no_color.gif#gh-light-mode-only) ![An animation demoing the path planning algorithm without color](media/fsg_no_color_dark_mode.gif#gh-dark-mode-only)                   |
-| Skidpad |
-| ![An animation demoing the path planning algorithm](media/skidpad_color.gif#gh-light-mode-only) ![An animation demoing the path planning algorithm](media/skidpad_color_dark_mode.gif#gh-dark-mode-only) | ![An animation demoing the path planning algorithm without color](media/skidpad_no_color.gif#gh-light-mode-only) ![An animation demoing the path planning algorithm without color](media/skidpad_no_color_dark_mode.gif#gh-dark-mode-only) |
-
-> [!NOTE]
-> You can find an interactive demo of the algorithm <a href="https://ft-fsd-path-planning.streamlit.app//" target="_blank">here.</a>
-
-## Updates 
-
-### December 2023, July 2024 (v0.4)
-
-#### (v0.4.3)
-
-- Added `Acceleration` relocalization and stable acceleration path calculation.
-- Added caching mechanism for the sorting step (about 20% performance improvement). 
-
-> [!IMPORTANT]
-> The caching step slightly changes the logic of the algorithm and has not been thoroughly tested. By default, the caching is disabled. To enable it, set the `experimental_performance_improvements` parameter of the `PathPlanner` class to `True`.
-
-#### (v0.4.1)
-
-Added a property to the PathPlanner class that gives information about the relocalization process. The property is called `relocalization_info` and is a dataclass called `RelocalizationInformation`. It contains the following fields:
-
-- `translation` - A 2d array with the translation of the relocalization
-- `rotation` - A float with the rotation of the relocalization
-
-If the relocalization process has not been run, or is not relevant (currently only Skidpad has relocalization), the property will return `None`.
-
-The internal Skidpad frame has its origin at the center of the Skidpad, with the x-axis pointing towards the exit of the Skidpad and the y-axis pointing to the left-hand loop.
-
-#### (v0.4.0)
-
-Further improvements were added in December 2023. The main focus was to make the Skidpad mission more robust. The algorithm now uses a different approach for the Skidpad mission, which is much simpler and does not rely on the color of the cones at all.
-
-The logic that runs during the Skidpad mission is stateful, so if you want to use it, you will have to review the usage of the relevant classes including `PathPlanner`. More specifically, while in the past one could create a new instance of the `PathPlanner` class, for each computation, with minimal performance penalties, now this will cause the Skidpad path calculation to fail. It is recommended to create a new instance of the `PathPlanner` class when the vehicle enters `AS-READY` state and the SLAM pose has stabilized.
-
-This version also adds `scikit-learn` as a dependency, which is used for the Skidpad mission. You may use the `summer-23` tag if you want to use the version of the algorithm that does not require `scikit-learn` and does not have the Skidpad improvements.
-
-### March 2023 (v0.3)
-
- In March 2023, a further development of this algorithm was published. The new version has two main improvements:
-
-- The algorithm can now work without color. It can use cones for which the color is known and cones for which the color is unknown at the same time.
-- Performance improvements. The algorithm is faster, with the main focus of improvement being the cone sorting step.
-
-## Introduction
-
-This repository contains the path planning algorithm developed by FaSTTUBe for the 2021/22 and 2022/23 Formula Student seasons.
-
-The intention of this repository is to provide teams entering the driverless category with a path planning algorithm, so that they can get up and running as fast as possible. Teams are encouraged to use this repository as a basis and adapt it to their own pipeline, as well as make changes that will improve the algorithm's performance. If your team decides to use this repository, feel free to inform us. We would be happy to hear about your experience.
-
-The algorithm differs from other common path planning approaches in that it can very robustly handle one side of the track not being visible, for example the inside of a corner. This is a common problem in the driverless category, especially for teams with less sophisticated detection pipelines.
-
-Parts that are specific to the FaSTTUBe pipeline have been removed. The algorithm is now a standalone library that can be used in any pipeline. It is a Python package that can be installed using pip.
+Formula Student Driverless Path Planning Algorithm
 
 The algorithm requires the following inputs:
 
