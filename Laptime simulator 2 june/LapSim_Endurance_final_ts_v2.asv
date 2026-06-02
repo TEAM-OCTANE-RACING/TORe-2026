@@ -1,0 +1,498 @@
+% =========================================================================
+% MASTER ENDURANCE SIMULATION SCRIPT (22km + Energy Calculation)
+% UPDATED VERSION:
+% 1. Stores FIRST LAP separately as timeseries
+% 2. Generates control inputs from FIRST LAP itself
+% 3. Exports BOTH:
+%       - First Lap Inputs
+%       - Full 22km Inputs
+% =========================================================================
+
+% =========================================================================
+% --- 0. SIMULATION PARAMETERS ---
+% =========================================================================
+
+TARGET_DISTANCE_M = 22000;
+
+% Vehicle Parameters
+Par.m        = 270;
+aero_par.Area= 0.99;
+aero_par.rho = 1.225;
+
+Par.C_rr     = 0.015;
+Par.Rw       = 0.228;
+Par.GR       = 10.05;
+Par.WB       = 1.532;
+Par.K_us     = -7.143e-7;
+
+Par.T_max_Nm = 29.1;
+Par.P_max_kW = 80;
+
+MASS_KG      = Par.m;
+CdA          = aero_par.Area;
+RHO          = aero_par.rho;
+ROLLING_RES  = Par.C_rr;
+
+% =========================================================================
+% --- 1. LOAD INPUTS ---
+% =========================================================================
+
+ggv_file = 'GGV_Final_Data.mat';
+
+if ~exist(ggv_file, 'file')
+
+    fprintf('Searching alternative GGV files...\n');
+
+    potential_files = {
+        'GGV_Sensor_Data.mat'
+        'GGV_Safe_Data.mat'
+        'GGV_Map.mat'
+        };
+
+    found = false;
+
+    for k = 1:length(potential_files)
+
+        if exist(potential_files{k}, 'file')
+
+            ggv_file = potential_files{k};
+            found = true;
+
+            fprintf('Found: %s\n', ggv_file);
+            break;
+
+        end
+    end
+
+    if ~found
+        error('No GGV file found.');
+    end
+end
+
+load(ggv_file, 'results');
+
+if ~exist('results', 'var')
+    error('GGV file does not contain results structure.');
+end
+
+track_file = ...
+'C:\Disk_E\TOR_controls\Modular_vehicle_model_23_May\Kari_FB.csv';
+
+if ~exist(track_file, 'file')
+
+    track_file = 'FB Track.csv';
+
+    if ~exist(track_file, 'file')
+        error('Track file not found.');
+    end
+end
+
+% =========================================================================
+% --- 2. OPTIMIZE RACING LINE ---
+% =========================================================================
+
+fprintf('\n=== STEP 1 : OPTIMIZE RACING LINE ===\n');
+
+[path_s, path_k, path_X, path_Y] = ...
+    Optimize_Racing_Line(track_file);
+
+% =========================================================================
+% --- 3. PROCESS GGV ---
+% =========================================================================
+
+fprintf('\n=== STEP 2 : PROCESS GGV ===\n');
+
+GGV_Env = Process_GGV_Envelope(results);
+
+% =========================================================================
+% --- 4. RUN ENDURANCE SIMULATION ---
+% =========================================================================
+
+fprintf('\n=== STEP 3 : RUN ENDURANCE ===\n');
+
+Track_Length_m = path_s(end);
+
+Num_Laps = ceil(TARGET_DISTANCE_M / Track_Length_m);
+
+fprintf('Track Length : %.2f m\n', Track_Length_m);
+fprintf('Num Laps     : %d\n', Num_Laps);
+
+% --- Standing Start Lap
+fprintf('\nRunning Standing Start Lap...\n');
+
+Results_SS = Solve_3Pass(path_s, path_k, GGV_Env, 0);
+
+% --- Flying Lap
+fprintf('Running Flying Lap...\n');
+
+v_flying_start = Results_SS.v(end);
+
+Results_FL = Solve_3Pass( ...
+    path_s, ...
+    path_k, ...
+    GGV_Env, ...
+    v_flying_start);
+
+Endurance_Time = ...
+    Results_SS.laptime + ...
+    (Num_Laps - 1) * Results_FL.laptime;
+
+% =========================================================================
+% --- 5. GENERATE CONTROLS ---
+% =========================================================================
+
+fprintf('\n=== STEP 4 : GENERATE CONTROLS ===\n');
+
+Controls_SS = ...
+    Generate_Control_Inputs( ...
+    Results_SS, ...
+    Par, ...
+    aero_par, ...
+    path_k);
+
+Controls_FL = ...
+    Generate_Control_Inputs( ...
+    Results_FL, ...
+    Par, ...
+    aero_par, ...
+    path_k);
+
+% =========================================================================
+% --- FIRST LAP DATA ---
+% =========================================================================
+
+fprintf('\nGenerating FIRST LAP timeseries...\n');
+
+firstlap_time = Results_SS.time;
+firstlap_s    = Results_SS.s;
+firstlap_v    = Results_SS.v;
+
+firstlap_thr  = Controls_SS.Throttle;
+firstlap_brk  = Controls_SS.Brake;
+firstlap_str  = Controls_SS.Steer_Angle_Deg;
+
+% Normalize
+
+if max(firstlap_thr) > 0
+    firstlap_thr_norm = ...
+        firstlap_thr ./ max(firstlap_thr);
+else
+    firstlap_thr_norm = firstlap_thr;
+end
+
+if max(firstlap_brk) > 0
+    firstlap_brk_norm = ...
+        firstlap_brk ./ max(firstlap_brk);
+else
+    firstlap_brk_norm = firstlap_brk;
+end
+
+% =========================================================================
+% --- CREATE FIRST LAP TIMESERIES ---
+% =========================================================================
+
+vel_ts_firstlap = ...
+    timeseries(firstlap_v, firstlap_time);
+
+dist_ts_firstlap = ...
+    timeseries(firstlap_s, firstlap_time);
+
+thr_ts_firstlap = ...
+    timeseries(firstlap_thr, firstlap_time);
+
+brk_ts_firstlap = ...
+    timeseries(firstlap_brk, firstlap_time);
+
+str_ts_firstlap = ...
+    timeseries(firstlap_str, firstlap_time);
+
+thr_norm_ts_firstlap = ...
+    timeseries(firstlap_thr_norm, firstlap_time);
+
+brk_norm_ts_firstlap = ...
+    timeseries(firstlap_brk_norm, firstlap_time);
+
+% =========================================================================
+% --- EXPORT FIRST LAP TIMESERIES ---
+% =========================================================================
+
+assignin('base', 'vel_ts_firstlap', vel_ts_firstlap);
+assignin('base', 'dist_ts_firstlap', dist_ts_firstlap);
+
+assignin('base', 'thr_ts_firstlap', thr_ts_firstlap);
+assignin('base', 'brk_ts_firstlap', brk_ts_firstlap);
+assignin('base', 'str_ts_firstlap', str_ts_firstlap);
+
+assignin('base', ...
+    'thr_norm_ts_firstlap', ...
+    thr_norm_ts_firstlap);
+
+assignin('base', ...
+    'brk_norm_ts_firstlap', ...
+    brk_norm_ts_firstlap);
+
+fprintf('FIRST LAP timeseries exported.\n');
+
+% =========================================================================
+% --- BUILD COMPLETE 22km PROFILE ---
+% =========================================================================
+
+fprintf('\nGenerating 22km profile...\n');
+
+v_22km    = Results_SS.v;
+s_22km    = Results_SS.s;
+time_22km = Results_SS.time;
+
+thr_22km  = Controls_SS.Throttle;
+brk_22km  = Controls_SS.Brake;
+str_22km  = Controls_SS.Steer_Angle_Deg;
+
+cum_time = Results_SS.laptime;
+cum_dist = Results_SS.s(end);
+
+for lap = 2:Num_Laps
+
+    v_22km = [
+        v_22km;
+        Results_FL.v(2:end)
+        ];
+
+    s_22km = [
+        s_22km;
+        Results_FL.s(2:end) + cum_dist
+        ];
+
+    time_22km = [
+        time_22km;
+        Results_FL.time(2:end) + cum_time
+        ];
+
+    thr_22km = [
+        thr_22km;
+        Controls_FL.Throttle(2:end)
+        ];
+
+    brk_22km = [
+        brk_22km;
+        Controls_FL.Brake(2:end)
+        ];
+
+    str_22km = [
+        str_22km;
+        Controls_FL.Steer_Angle_Deg(2:end)
+        ];
+
+    cum_time = cum_time + Results_FL.laptime;
+    cum_dist = cum_dist + Results_FL.s(end);
+
+end
+
+% =========================================================================
+% --- NORMALIZE FULL ENDURANCE INPUTS ---
+% =========================================================================
+
+if max(thr_22km) > 0
+    thr_norm_22km = thr_22km ./ max(thr_22km);
+else
+    thr_norm_22km = thr_22km;
+end
+
+if max(brk_22km) > 0
+    brk_norm_22km = brk_22km ./ max(brk_22km);
+else
+    brk_norm_22km = brk_22km;
+end
+
+% =========================================================================
+% --- CREATE FULL ENDURANCE TIMESERIES ---
+% =========================================================================
+
+vel_ts = timeseries(v_22km, time_22km);
+
+dist_ts = timeseries(s_22km, time_22km);
+
+thr_ts = timeseries(thr_22km, time_22km);
+
+brk_ts = timeseries(brk_22km, time_22km);
+
+str_ts = timeseries(str_22km, time_22km);
+
+thr_norm_ts = timeseries(thr_norm_22km, time_22km);
+
+brk_norm_ts = timeseries(brk_norm_22km, time_22km);
+
+% =========================================================================
+% --- EXPORT FULL ENDURANCE TIMESERIES ---
+% =========================================================================
+
+assignin('base', 'vel_ts', vel_ts);
+assignin('base', 'dist_ts', dist_ts);
+
+assignin('base', 'thr_ts', thr_ts);
+assignin('base', 'brk_ts', brk_ts);
+assignin('base', 'str_ts', str_ts);
+
+assignin('base', 'thr_norm_ts', thr_norm_ts);
+assignin('base', 'brk_norm_ts', brk_norm_ts);
+
+fprintf('22km timeseries exported.\n');
+
+% =========================================================================
+% --- ENERGY CALCULATION ---
+% =========================================================================
+
+fprintf('\n=== STEP 5 : ENERGY ===\n');
+
+[E_SS_kWh, P_SS_kW] = ...
+    Calculate_Energy( ...
+    Results_SS, ...
+    MASS_KG, ...
+    CdA, ...
+    RHO, ...
+    ROLLING_RES);
+
+[E_FL_kWh, P_FL_kW] = ...
+    Calculate_Energy( ...
+    Results_FL, ...
+    MASS_KG, ...
+    CdA, ...
+    RHO, ...
+    ROLLING_RES);
+
+Total_Energy_kWh = ...
+    E_SS_kWh + ...
+    (Num_Laps - 1) * E_FL_kWh;
+
+Results = Results_FL;
+
+Results.Power_kW  = P_FL_kW;
+
+Results.steer_deg = ...
+    Controls_FL.Steer_Angle_Deg;
+
+% =========================================================================
+% --- RESULTS ---
+% =========================================================================
+
+fprintf('\n=== SIMULATION COMPLETE ===\n');
+
+fprintf('Standing Start Lap : %.3f s\n', ...
+    Results_SS.laptime);
+
+fprintf('Flying Lap         : %.3f s\n', ...
+    Results_FL.laptime);
+
+fprintf('Total Endurance    : %.3f s\n', ...
+    Endurance_Time);
+
+fprintf('Total Energy       : %.3f kWh\n', ...
+    Total_Energy_kWh);
+
+fprintf('Max Speed          : %.1f km/h\n', ...
+    max(Results.v)*3.6);
+
+% =========================================================================
+% --- HELPER FUNCTIONS ---
+% =========================================================================
+
+function [s_final, k_final, x_final, y_final] = ...
+    Optimize_Racing_Line(filename)
+
+    data = readmatrix(filename);
+
+    xc = data(:,1);
+    yc = data(:,2);
+
+    wl = data(:,3);
+    wr = data(:,4);
+
+    if norm([xc(1)-xc(end), yc(1)-yc(end)]) > 0.1
+
+        xc(end+1)=xc(1);
+        yc(end+1)=yc(1);
+
+        wl(end+1)=wl(1);
+        wr(end+1)=wr(1);
+
+    end
+
+    N = length(xc);
+
+    x = xc;
+    y = yc;
+
+    Iterations = 200;
+
+    Safety_Margin = 0.5;
+
+    for iter = 1:Iterations
+
+        xt = 0.5 * ...
+            ([x(end-1); x(1:end-1)] + ...
+             [x(2:end); x(2)]);
+
+        yt = 0.5 * ...
+            ([y(end-1); y(1:end-1)] + ...
+             [y(2:end); y(2)]);
+
+        for i = 1:N
+
+            dx = xt(i) - xc(i);
+            dy = yt(i) - yc(i);
+
+            dist = sqrt(dx^2 + dy^2);
+
+            if i < N
+                tx = xc(i+1)-xc(i);
+                ty = yc(i+1)-yc(i);
+            else
+                tx = xc(2)-xc(1);
+                ty = yc(2)-yc(1);
+            end
+
+            if (tx*dy - ty*dx) > 0
+                max_w = wl(i)-Safety_Margin;
+            else
+                max_w = wr(i)-Safety_Margin;
+            end
+
+            if max_w < 0.1
+                max_w = 0.1;
+            end
+
+            if dist > max_w
+
+                scale = max_w / dist;
+
+                x(i) = xc(i) + dx * scale;
+                y(i) = yc(i) + dy * scale;
+
+            else
+
+                x(i) = xt(i);
+                y(i) = yt(i);
+
+            end
+        end
+    end
+
+    dx = gradient(x);
+    dy = gradient(y);
+
+    ddx = gradient(dx);
+    ddy = gradient(dy);
+
+    k_raw = ...
+        (dx .* ddy - dy .* ddx) ./ ...
+        ((dx.^2 + dy.^2).^1.5);
+
+    k_final = smoothdata(k_raw, 'gaussian', 15);
+
+    ds = sqrt(dx.^2 + dy.^2);
+
+    s_final = [0; cumsum(ds(2:end))];
+
+    x_final = x;
+    y_final = y;
+
+end
