@@ -1,5 +1,5 @@
 %% 1. Setup Path & Pre-calculate Curvature
-race = readmatrix("skidpad_centerline.csv");
+race = readmatrix("Austin.csv");
 path.x = race(2:end,1);
 path.y = race(2:end,2);
 dx = gradient(path.x);
