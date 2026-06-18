@@ -9,8 +9,7 @@ from fsd_path_planning.full_pipeline.full_pipeline import PathPlanner
 from fsd_path_planning.utils.cone_types import ConeTypes
 from fsd_path_planning.utils.mission_types import MissionTypes
 
-# IMPORT THE NEW TRAJECTORY OPTIMIZER LIBRARY
-# Note: Adjust the import path based on where you place trajectory_optimization.py
+# 🚀 IMPORT THE NEW UNIFIED TRAJECTORY OPTIMIZER LIBRARY
 from fsd_path_planning.utils.trajectory_optimization import TrajectoryOptimizer
 
 # ==========================================================
@@ -44,17 +43,6 @@ MIN_LAP_DISTANCE = 150.0
 # ==========================================================
 # 1. HELPER FUNCTIONS
 # ==========================================================
-def calculate_car_boundaries(path, half_width):
-    dx = np.gradient(path[:, 0])
-    dy = np.gradient(path[:, 1])
-    norm = np.sqrt(dx**2 + dy**2) + 1e-6
-    nx = -dy / norm
-    ny = dx / norm
-    
-    left_bound = np.column_stack((path[:, 0] + nx * half_width, path[:, 1] + ny * half_width))
-    right_bound = np.column_stack((path[:, 0] - nx * half_width, path[:, 1] - ny * half_width))
-    return left_bound, right_bound
-
 def get_target_from_global_path(path, current_pos, lookahead):
     dists = np.linalg.norm(path[:, :2] - current_pos, axis=1) # Only compare X, Y
     closest_idx = np.argmin(dists)
@@ -69,9 +57,13 @@ def get_target_from_global_path(path, current_pos, lookahead):
 # ==========================================================
 # 2. LOAD TRACK & CONES
 # ==========================================================
-# Dynamically resolve paths for Ubuntu/Windows compatibility
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TRACK_FILE = os.path.join(BASE_DIR, "layouts", "track_7.json")
+
+# Point directly to your layout-merchant folder!
+TRACK_FILE = r"C:\Users\Ayush\layout-merchant\layouts\track_7.json" 
+
+OUTPUT_DIR = os.path.join(BASE_DIR, "fsd_path_planning", "output")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 OUTPUT_DIR = os.path.join(BASE_DIR, "fsd_path_planning", "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -98,7 +90,9 @@ yaw = np.deg2rad(track["start_orientation"])
 vehicle_direction = np.array([np.cos(yaw), np.sin(yaw)])
 
 planner = PathPlanner(MissionTypes.trackdrive)
-optimizer = TrajectoryOptimizer(vehicle_limits) # Initialize our new library
+
+# 🚀 INITIALIZE OUR NEW LIBRARY
+optimizer = TrajectoryOptimizer(vehicle_limits) 
 
 frames, trajectory_log, lap1_trajectory = [], [], []
 optimized_racing_line = None
@@ -161,7 +155,7 @@ while current_lap <= TOTAL_LAPS:
             print(f"⚙️ Running Unified Trajectory Optimization Pipeline...")
             centerline_lap1 = np.array(lap1_trajectory)
             
-            # RUN THE ENTIRE MATH PIPELINE IN ONE LINE
+            # 🚀 RUN THE ENTIRE MATH PIPELINE IN ONE LINE!
             results = optimizer.generate_full_trajectory(
                 centerline=centerline_lap1, 
                 track_half_width=1.5, 
