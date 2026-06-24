@@ -219,7 +219,7 @@ private:
         int best_id = -1;
         double best_score = 1e9;
         
-        double dist_gate = (color == 2) ? 8.5 : (loop_closed_ ? 4.5 : 2.2); 
+        double dist_gate = (color == 2) ? 8.5 : (loop_closed_ ? 2.5 : 2.0); 
 
         auto check_values = [&](const Values& vals) {
             for (auto const& [key, val] : vals) {
