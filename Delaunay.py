@@ -13,7 +13,7 @@ from fsd_path_planning.utils.mission_types import MissionTypes
 # ==========================================================
 # 1. Load track JSON
 # ==========================================================
-with open(r"C:\Users\Ayush\layout-merchant\layouts\track_1.json", "r") as f:
+with open(r"C:\Users\Ayush\layout-merchant\layouts\track_3.json", "r") as f:
     track = json.load(f)
 
 x = np.array(track["x"])
