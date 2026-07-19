@@ -4,7 +4,7 @@
 #include <cmath>
 #include <algorithm>
 #include <mutex>
-#include <random> // Added for eliminating sequential bias
+#include <random> 
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/qos.hpp>
@@ -20,7 +20,6 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Transform.h>
 #include <tf2/LinearMath/Matrix3x3.h>
-
 #include <Eigen/Dense> 
 
 using std::placeholders::_1;
@@ -74,7 +73,7 @@ public:
         odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
             "/odometry/filtered", 10, std::bind(&EKFSLAM::odomCallback, this, _1));
 
-        RCLCPP_INFO(this->get_logger(), "EKF-SLAM initialized. Anti-Slide & Time Sync Active.");
+        RCLCPP_INFO(this->get_logger(), "EKF-SLAM initialized. Pure Localization & Strict Map Lock Active.");
     }
 
 private:
@@ -89,6 +88,9 @@ private:
     double total_dist_ = 0.0; 
     int lap_count_ = 0;             
     
+    double dist_since_closure_ = 0.0;
+    static constexpr double kSettleDistance = 15.0; // meters of "loose gate" grace period
+
     double vx_ = 0.0, yaw_rate_ = 0.0;
     
     nav_msgs::msg::Odometry::SharedPtr current_odom_msg_;
@@ -102,7 +104,7 @@ private:
     rclcpp::Publisher<eufs_msgs::msg::ConeArray>::SharedPtr global_map_pub_;
 
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-    std::default_random_engine rng_{std::random_device{}()}; // Seeded RNG for anti-bias
+    std::default_random_engine rng_{std::random_device{}()}; 
 
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
         std::lock_guard<std::recursive_mutex> lock(slam_mutex_);
@@ -119,9 +121,7 @@ private:
         for (const auto &cone : msg->orange_cones) addConeToBuffer(cone.point, 2);
         for (const auto &cone : msg->big_orange_cones) addConeToBuffer(cone.point, 2);
         
-        
         std::shuffle(z_buffer_.begin(), z_buffer_.end(), rng_);
-
         runSLAM();
     }
 
@@ -149,7 +149,8 @@ private:
         Eigen::MatrixXd P_rr = P_.block(0, 0, 3, 3);
         P_.block(0, 0, 3, 3) = G_rob * P_rr * G_rob.transpose();
 
-        if (num_landmarks > 0) {
+        // Stop rotating map uncertainty when map is locked
+        if (num_landmarks > 0 && !lap_closed_) {
             Eigen::MatrixXd P_rm = P_.block(0, 3, 3, 2 * num_landmarks);
             P_.block(0, 3, 3, 2 * num_landmarks) = G_rob * P_rm;
             P_.block(3, 0, 2 * num_landmarks, 3) = P_.block(0, 3, 3, 2 * num_landmarks).transpose();
@@ -198,7 +199,6 @@ private:
             last_odom_msg_ = current_odom_msg_;
             return;
         }
-
         
         rclcpp::Time sync_stamp = current_odom_msg_->header.stamp;
 
@@ -226,10 +226,15 @@ private:
         }
 
         predict(dx_local, dy_local, dyaw);
-        total_dist_ += std::hypot(dx_local, dy_local);
+        
+        double step_dist = std::hypot(dx_local, dy_local);
+        total_dist_ += step_dist;
+        if (lap_closed_) {
+            dist_since_closure_ += step_dist;
+        }
         
         double dist_to_origin = std::hypot(x_(0), x_(1));
-
+        
         int orange_cones_seen = 0;
         for (const auto& z : z_buffer_) {
             if (z.color == 2 && z.range < 8.0 && std::abs(z.bearing) < 1.0) {
@@ -244,7 +249,8 @@ private:
         if (!lap_closed_ && total_dist_ > 100.0 && (crossed_orange_line || near_start)) {
             lap_count_++;
             lap_closed_ = true;
-            RCLCPP_INFO(this->get_logger(), "🏁 LOOP CLOSURE LOCKED! Transitioning to pure localization.");
+            dist_since_closure_ = 0.0;
+            RCLCPP_INFO(this->get_logger(), "🏁 LOOP CLOSURE LOCKED! Entering settling window.");
 
             eufs_msgs::msg::ConeArray global_msg;
             global_msg.header.stamp = sync_stamp;
@@ -263,15 +269,21 @@ private:
             global_map_pub_->publish(global_msg);
         }
 
+        bool settling = lap_closed_ && (dist_since_closure_ < kSettleDistance);
+
+        // DO NOT let the filter ignore the map. 
         Eigen::Matrix2d R_dynamic = R_;
-        if (lap_closed_) {
-            R_dynamic = R_ * 20.0;
+        if (settling) {
+            R_dynamic = R_ * 2.0;
+        } else if (lap_closed_) {
+            R_dynamic = R_ * 1.0;
         } else if (nearing_loop_closure) {
-            R_dynamic = R_ * 150.0; 
+            R_dynamic = R_ * 5.0; 
         }
 
-        double physical_gate = (lap_closed_ || nearing_loop_closure) ? 4.0 : 1.2;
-        double mahalanobis_gate = (lap_closed_ || nearing_loop_closure) ? 30.0 : 5.99;
+        // Gates configured correctly to absorb slip and lock tightly
+        double physical_gate    = settling ? 4.0  : (lap_closed_ ? 2.5 : (nearing_loop_closure ? 4.0 : 1.2));
+        double mahalanobis_gate = settling ? 30.0 : (lap_closed_ ? 15.0 : (nearing_loop_closure ? 30.0 : 5.99));
 
         for (const auto &z : z_buffer_) {
             int best_j = -1; 
@@ -293,12 +305,19 @@ private:
                 Eigen::Vector2d v; v << z.range - zhat(0), wrapToPi(z.bearing - zhat(1));
                 
                 Eigen::MatrixXd Prr = P_.block(0, 0, 3, 3);
-                Eigen::MatrixXd Prm = P_.block(0, 3 + 2 * j, 3, 2);
-                Eigen::MatrixXd Pmr = P_.block(3 + 2 * j, 0, 2, 3);
-                Eigen::MatrixXd Pmm = P_.block(3 + 2 * j, 3 + 2 * j, 2, 2);
+                Eigen::Matrix2d S;
 
-                Eigen::Matrix2d S = Hr * Prr * Hr.transpose() + Hr * Prm * Hm.transpose() + 
-                                    Hm * Pmr * Hr.transpose() + Hm * Pmm * Hm.transpose() + R_dynamic;
+                // PURE LOCALIZATION DATA ASSOCIATION
+                if (lap_closed_) {
+                    S = Hr * Prr * Hr.transpose() + R_dynamic;
+                } else {
+                    Eigen::MatrixXd Prm = P_.block(0, 3 + 2 * j, 3, 2);
+                    Eigen::MatrixXd Pmr = P_.block(3 + 2 * j, 0, 2, 3);
+                    Eigen::MatrixXd Pmm = P_.block(3 + 2 * j, 3 + 2 * j, 2, 2);
+
+                    S = Hr * Prr * Hr.transpose() + Hr * Prm * Hm.transpose() + 
+                        Hm * Pmr * Hr.transpose() + Hm * Pmm * Hm.transpose() + R_dynamic;
+                }
                 
                 if (S.determinant() < 1e-6) continue;
                 double md = v.transpose() * S.inverse() * v;
@@ -313,19 +332,33 @@ private:
                 measurementModel(best_j, zhat, H); 
                 Eigen::Vector2d v; v << z.range - zhat(0), wrapToPi(z.bearing - zhat(1));
                 
-                Eigen::MatrixXd HP = H * P_;
-                Eigen::Matrix2d S = HP * H.transpose() + R_dynamic; 
-                Eigen::MatrixXd K = P_ * H.transpose() * S.inverse();
-                
                 if (lap_closed_) {
-                    K.block(3, 0, K.rows() - 3, 2).setZero(); 
-                }
-                
-                x_ += K * v;
-                x_(2) = wrapToPi(x_(2)); 
-                
-                P_ = P_ - K * HP; 
+                    // --- TRUE PURE LOCALIZATION ---
+                    Eigen::MatrixXd Prr = P_.block(0, 0, 3, 3);
+                    Eigen::MatrixXd Hr_loc = H.block(0, 0, 2, 3); 
+                    
+                    Eigen::Matrix2d S_loc = Hr_loc * Prr * Hr_loc.transpose() + R_dynamic;
+                    
+                    Eigen::MatrixXd K_loc = Prr * Hr_loc.transpose() * S_loc.inverse();
+                    
+                    x_.head(3) += K_loc * v;
+                    x_(2) = wrapToPi(x_(2));
+                    
+                    P_.block(0, 0, 3, 3) = Prr - K_loc * Hr_loc * Prr;
 
+                } else {
+                    // --- FULL SLAM UPDATE (LAP 1) ---
+                    Eigen::MatrixXd HP = H * P_;
+                    Eigen::Matrix2d S = HP * H.transpose() + R_dynamic; 
+                    Eigen::MatrixXd K = P_ * H.transpose() * S.inverse();
+                    
+                    x_ += K * v;
+                    x_(2) = wrapToPi(x_(2)); 
+                    
+                    P_ = P_ - K * HP; 
+                }
+
+            // --- STRICT MAP LOCK ---
             } else if (!lap_closed_) {
                 bool duplicate = false;
                 for(size_t i=0; i < lm_info_.size(); ++i) {
@@ -351,6 +384,7 @@ private:
             }
         }
         
+        // SYMMETRY ENFORCER 
         P_ = 0.5 * (P_ + P_.transpose());
         for(int i = 0; i < P_.rows(); ++i) {
             P_(i, i) += 1e-9;
